@@ -57,13 +57,15 @@ class DatabaseProvider with ChangeNotifier {
       await txn.execute('''CREATE TABLE $uTable(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT,
-        password TEXT
+        password TEXT,
+        active INTEGER DEFAULT 0
       )''');
 
       await txn.execute('''CREATE TABLE $cTable(
         title TEXT,
         entries INTEGER,
-        totalAmount TEXT
+        totalAmount TEXT,
+        username TEXT
       )''');
       // expense table
       await txn.execute('''CREATE TABLE $eTable(
@@ -86,14 +88,49 @@ class DatabaseProvider with ChangeNotifier {
     });
   }
 
+  // Future<bool> login(Users user) async {
+  //   final db = await database;
+  //   List<Map> result = await db.rawQuery('SELECT * FROM usersTable WHERE username = ? AND password = ?', [user.username, user.password]);
+
+  //   if (result.isNotEmpty) {
+  //     return true;
+  //   }
+  //   return false;
+  // }
+
   Future<bool> login(Users user) async {
     final db = await database;
-    List<Map> result = await db.rawQuery('SELECT * FROM usersTable WHERE username = ? AND password = ?', [user.username, user.password]);
+    List<Map> result = await db.rawQuery(
+      'SELECT * FROM usersTable WHERE username = ? AND password = ?',
+      [user.username, user.password],
+    );
 
     if (result.isNotEmpty) {
+      await db.update(
+        'usersTable',
+        {'active': 1},
+        where: 'username = ? AND password = ?',
+        whereArgs: [user.username, user.password],
+      );
       return true;
     }
     return false;
+  }
+
+  Future<String?> getActiveUsername() async {
+    final db = await database;
+    List<Map> result = await db.query(
+      'usersTable',
+      where: 'active = ?',
+      whereArgs: [1],
+      limit: 1,
+    );
+
+    if (result.isNotEmpty) {
+      return result.first['username'];
+    }
+
+    return null;
   }
 
   Future<void> register(Users user) async {
@@ -105,18 +142,14 @@ class DatabaseProvider with ChangeNotifier {
   // method to fetch categories
 
   Future<List<ExpenseCategory>> fetchCategories() async {
-    // get the database
     final db = await database;
+    final activeUsername = await getActiveUsername();
+
     return await db.transaction((txn) async {
-      return await txn.query(cTable).then((data) {
-        // 'data' is our fetched value
-        // convert it from "Map<String, object>" to "Map<String, dynamic>"
+      return await txn.query(cTable, where: 'username = ?', whereArgs: [activeUsername]).then((data) {
         final converted = List<Map<String, dynamic>>.from(data);
-        // create a 'ExpenseCategory'from every 'map' in this 'converted'
         List<ExpenseCategory> nList = List.generate(converted.length, (index) => ExpenseCategory.fromString(converted[index]));
-        // set the value of 'categories' to 'nList'
         _categories = nList;
-        // return the '_categories'
         return _categories;
       });
     });
@@ -124,6 +157,13 @@ class DatabaseProvider with ChangeNotifier {
 
   Future<void> viewDatabaseContents() async {
     final db = await database;
+
+    // Fetch and print data from the category table
+    final userData = await db.query(uTable);
+    print('Users Table:');
+    userData.forEach((row) {
+      print(row);
+    });
 
     // Fetch and print data from the category table
     final categoryData = await db.query(cTable);
@@ -170,15 +210,27 @@ class DatabaseProvider with ChangeNotifier {
 
   Future<void> addExpense(Expense exp) async {
     final db = await database;
+    final activeUsername = await getActiveUsername();
+
     await db.transaction((txn) async {
       await txn
           .insert(
         cTable,
-        {'title': exp.title, 'totalAmount': exp.amount, 'entries': 1},
+        {
+          'title': exp.title,
+          'totalAmount': exp.amount,
+          'entries': 1,
+          'username': activeUsername,
+        },
         conflictAlgorithm: ConflictAlgorithm.replace,
       )
           .then((_) {
-        _categories.add(ExpenseCategory(title: exp.title, entries: 1, totalAmount: exp.amount, icon: Icons.circle));
+        _categories.add(ExpenseCategory(
+          title: exp.title,
+          entries: 1,
+          totalAmount: exp.amount,
+          icon: Icons.circle,
+        ));
         notifyListeners();
       });
     });
@@ -305,5 +357,15 @@ class DatabaseProvider with ChangeNotifier {
     }
     // return the list
     return data;
+  }
+
+  Future<void> resetActiveUsers() async {
+    final db = await database;
+    await db.transaction((txn) async {
+      await txn.update(
+        uTable, // usersTable
+        {'active': 0}, // set 'active' column to 0
+      );
+    });
   }
 }
